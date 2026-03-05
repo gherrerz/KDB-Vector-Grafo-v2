@@ -202,9 +202,26 @@ class MainWindow(QMainWindow):
 
     def _on_query(self) -> None:
         """Send query request and render answer with citations."""
+        repo_id = self.query_view.repo_id.text().strip()
+        question = self.query_view.query_input.toPlainText().strip()
+
+        if not repo_id:
+            self.query_view.set_status("error", "Error")
+            self.query_view.set_answer("Debes indicar el ID de repositorio.")
+            return
+
+        if not question:
+            self.query_view.set_status("error", "Error")
+            self.query_view.set_answer("Debes escribir una pregunta para consultar.")
+            return
+
+        self.query_view.set_running(True)
+        self.query_view.set_status("running", "Consultando")
+        self.query_view.set_answer("Buscando evidencia y generando respuesta...")
+
         payload = {
-            "repo_id": self.query_view.repo_id.text().strip(),
-            "query": self.query_view.query_input.toPlainText().strip(),
+            "repo_id": repo_id,
+            "query": question,
             "top_n": 80,
             "top_k": 20,
         }
@@ -212,10 +229,23 @@ class MainWindow(QMainWindow):
             response = requests.post(f"{API_BASE}/query", json=payload, timeout=60)
             response.raise_for_status()
             data = response.json()
-            self.query_view.answer_output.setPlainText(data["answer"])
+            self.query_view.set_answer(str(data.get("answer") or "Sin respuesta."))
             self.evidence_view.set_citations(data["citations"])
+            self.query_view.set_status("success", "Completado")
+        except requests.HTTPError:
+            detail = "Error HTTP en consulta."
+            try:
+                error_data = response.json()
+                detail = str(error_data.get("detail") or detail)
+            except Exception:
+                pass
+            self.query_view.set_status("error", "Error")
+            self.query_view.set_answer(f"{detail}\n\nEndpoint: {API_BASE}/query")
         except Exception as exc:
-            self.query_view.answer_output.setPlainText(f"Error en consulta: {exc}")
+            self.query_view.set_status("error", "Error")
+            self.query_view.set_answer(f"Error en consulta: {exc}")
+        finally:
+            self.query_view.set_running(False)
 
 
 def main() -> None:

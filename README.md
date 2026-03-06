@@ -14,6 +14,7 @@ verificable (archivos y líneas).
 - [Ejemplos de Uso](#ejemplos-de-uso)
 - [Estructura del Proyecto](#estructura-del-proyecto)
 - [Testing](#testing)
+- [QA Manual (UI)](#qa-manual-ui)
 - [Troubleshooting](#troubleshooting)
 
 ## Descripción General
@@ -199,6 +200,25 @@ Cobertura validada en la implementación actual:
 - Parsing de símbolos.
 - Manejo de límites de batch/embeddings.
 - Detección de inventarios estructurados.
+
+## QA Manual (UI)
+
+Checklist sugerida antes de release (3 escenarios):
+
+1. **Ingesta exitosa**
+   - Abrir la pestaña **Ingesta** y completar `provider`, `repo_url`, `branch`.
+   - Ejecutar **Ingestar** y verificar transición de estado: `Idle` → `En progreso` → `Completado`.
+   - Confirmar que `Job ID`, `Repo ID`, barra de progreso y logs se actualizan.
+
+2. **Consulta válida**
+   - Ir a **Consulta** con un `Repo ID` existente y una pregunta no vacía.
+   - Verificar estado de consulta: `Lista` → `Consultando` → `Completado`.
+   - Confirmar que se muestra respuesta y que la tabla **Evidencia** contiene filas.
+
+3. **Errores de validación y API**
+   - Ejecutar consulta sin `Repo ID` o sin pregunta y validar mensaje claro en UI.
+   - Con API detenida, lanzar consulta y confirmar estado `Error` con detalle legible.
+   - Verificar que el botón vuelve a estado habilitado al finalizar.
 
 ## Troubleshooting
 

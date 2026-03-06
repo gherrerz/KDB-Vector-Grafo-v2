@@ -15,6 +15,7 @@ verificable (archivos y líneas).
 - [Estructura del Proyecto](#estructura-del-proyecto)
 - [Testing](#testing)
 - [QA Manual (UI)](#qa-manual-ui)
+- [Notas de Versión](#notas-de-versión)
 - [Troubleshooting](#troubleshooting)
 
 ## Descripción General
@@ -219,6 +220,16 @@ Checklist sugerida antes de release (3 escenarios):
    - Ejecutar consulta sin `Repo ID` o sin pregunta y validar mensaje claro en UI.
    - Con API detenida, lanzar consulta y confirmar estado `Error` con detalle legible.
    - Verificar que el botón vuelve a estado habilitado al finalizar.
+
+## Notas de Versión
+
+### v1.0.0-ui-polish
+
+- Rediseño visual de la pestaña **Ingesta** con estado, progreso y campos de job.
+- Polling de jobs en UI para reflejar estado real de ingesta en tiempo real.
+- Rediseño de **Consulta** y **Evidencia** con tema unificado y mejor legibilidad.
+- Validaciones y feedback de error mejorados para consultas en UI.
+- Checklist de QA manual para validación pre-release.
 
 ## Troubleshooting
 

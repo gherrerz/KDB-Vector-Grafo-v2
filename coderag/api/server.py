@@ -13,6 +13,7 @@ from coderag.core.models import (
     QueryRequest,
     QueryResponse,
     RepoCatalogResponse,
+    RepoQueryStatusResponse,
     RepoIngestRequest,
     ResetResponse,
     StorageHealthResponse,
@@ -20,6 +21,7 @@ from coderag.core.models import (
 from coderag.core.storage_health import (
     StoragePreflightError,
     ensure_storage_ready,
+    get_repo_query_status,
     run_storage_preflight,
 )
 from coderag.jobs.worker import JobManager
@@ -83,6 +85,25 @@ def query_repo(request: QueryRequest) -> QueryResponse:
             },
         ) from exc
 
+    listed_repo_ids = jobs.list_repo_ids()
+    listed_in_catalog = request.repo_id in listed_repo_ids
+    readiness = get_repo_query_status(
+        repo_id=request.repo_id,
+        listed_in_catalog=listed_in_catalog,
+    )
+    if not readiness["query_ready"]:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    "El repositorio no está listo para consultas. "
+                    "Reingesta el repositorio o revisa el estado de índices."
+                ),
+                "code": "repo_not_ready",
+                "repo_status": readiness,
+            },
+        )
+
     return run_query(
         repo_id=request.repo_id,
         query=request.query,
@@ -119,6 +140,17 @@ def query_inventory(request: InventoryQueryRequest) -> InventoryQueryResponse:
 def list_repos() -> RepoCatalogResponse:
     """Devuelve los identificadores del repositorio actualmente disponibles para consultas."""
     return RepoCatalogResponse(repo_ids=jobs.list_repo_ids())
+
+
+@app.get("/repos/{repo_id}/status", response_model=RepoQueryStatusResponse)
+def repo_status(repo_id: str) -> RepoQueryStatusResponse:
+    """Devuelve estado de disponibilidad de consulta para un repositorio."""
+    listed_repo_ids = jobs.list_repo_ids()
+    status_payload = get_repo_query_status(
+        repo_id=repo_id,
+        listed_in_catalog=repo_id in listed_repo_ids,
+    )
+    return RepoQueryStatusResponse(**status_payload)
 
 
 @app.get("/health/storage", response_model=StorageHealthResponse)

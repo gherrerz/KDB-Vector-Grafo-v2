@@ -1,6 +1,7 @@
 """Constructores de fragmentos para símbolos, archivos y módulos."""
 
 import hashlib
+import json
 import re
 
 from coderag.core.models import ScannedFile, SymbolChunk
@@ -17,6 +18,7 @@ def extract_symbol_chunks(repo_id: str, scanned_files: list[ScannedFile]) -> lis
     chunks: list[SymbolChunk] = []
     for file_obj in scanned_files:
         lines = file_obj.content.splitlines()
+        extracted_in_file = 0
         for index, line in enumerate(lines):
             py_match = re.match(r"\s*(def|class)\s+([A-Za-z_][A-Za-z0-9_]*)", line)
             js_match = re.match(r"\s*function\s+([A-Za-z_][A-Za-z0-9_]*)", line)
@@ -73,4 +75,94 @@ def extract_symbol_chunks(repo_id: str, scanned_files: list[ScannedFile]) -> lis
                     snippet=snippet,
                 )
             )
+            extracted_in_file += 1
+
+        if extracted_in_file > 0:
+            continue
+
+        if file_obj.language == "markdown":
+            for index, line in enumerate(lines):
+                heading_match = re.match(r"\s{0,3}#{1,6}\s+(.+)", line)
+                if not heading_match:
+                    continue
+                heading = heading_match.group(1).strip()
+                if not heading:
+                    continue
+                start_line = index + 1
+                end_line = min(start_line + 20, len(lines))
+                snippet = "\n".join(lines[start_line - 1 : end_line])
+                chunks.append(
+                    SymbolChunk(
+                        id=_chunk_id(repo_id, file_obj.path, heading, start_line),
+                        repo_id=repo_id,
+                        path=file_obj.path,
+                        language=file_obj.language,
+                        symbol_name=heading,
+                        symbol_type="section",
+                        start_line=start_line,
+                        end_line=end_line,
+                        snippet=snippet,
+                    )
+                )
+            continue
+
+        if file_obj.language in {"yaml", "toml"}:
+            pattern = r"^\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]"
+            for index, line in enumerate(lines):
+                key_match = re.match(pattern, line)
+                if not key_match:
+                    continue
+                key_name = key_match.group(1)
+                start_line = index + 1
+                end_line = min(start_line + 8, len(lines))
+                snippet = "\n".join(lines[start_line - 1 : end_line])
+                chunks.append(
+                    SymbolChunk(
+                        id=_chunk_id(repo_id, file_obj.path, key_name, start_line),
+                        repo_id=repo_id,
+                        path=file_obj.path,
+                        language=file_obj.language,
+                        symbol_name=key_name,
+                        symbol_type="config_key",
+                        start_line=start_line,
+                        end_line=end_line,
+                        snippet=snippet,
+                    )
+                )
+            continue
+
+        if file_obj.language == "json":
+            try:
+                payload = json.loads(file_obj.content)
+            except Exception:
+                payload = None
+
+            if isinstance(payload, dict):
+                for key_name in list(payload.keys())[:40]:
+                    key_pattern = rf'"{re.escape(str(key_name))}"\s*:'
+                    start_line = 1
+                    for index, line in enumerate(lines):
+                        if re.search(key_pattern, line):
+                            start_line = index + 1
+                            break
+                    end_line = min(start_line + 8, len(lines))
+                    snippet = "\n".join(lines[start_line - 1 : end_line])
+                    chunks.append(
+                        SymbolChunk(
+                            id=_chunk_id(
+                                repo_id,
+                                file_obj.path,
+                                str(key_name),
+                                start_line,
+                            ),
+                            repo_id=repo_id,
+                            path=file_obj.path,
+                            language=file_obj.language,
+                            symbol_name=str(key_name),
+                            symbol_type="config_key",
+                            start_line=start_line,
+                            end_line=end_line,
+                            snippet=snippet,
+                        )
+                    )
     return chunks

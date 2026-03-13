@@ -58,6 +58,13 @@ class MainWindow(QMainWindow):
         self._selected_query_repo_id = self.query_view.get_repo_id_text()
         self.query_view.repo_id.currentTextChanged.connect(self._on_query_repo_changed)
 
+    def _set_query_controls_enabled(self, enabled: bool) -> None:
+        """Habilita o deshabilita acciones de consulta durante operaciones críticas."""
+        self.query_view.repo_id.setDisabled(not enabled)
+        self.query_view.refresh_repo_ids_button.setDisabled(not enabled)
+        self.query_view.query_input.setDisabled(not enabled)
+        self.query_view.query_button.setDisabled(not enabled)
+
     def _apply_window_theme(self) -> None:
         """Establezca un estilo oscuro consistente para pestañas y widgets de shell."""
         self.setStyleSheet(
@@ -126,6 +133,7 @@ class MainWindow(QMainWindow):
             if job_id:
                 self._active_job_id = job_id
                 self._job_poll_enabled = True
+                self._set_query_controls_enabled(False)
                 self.ingestion_view.set_status("running", "En progreso")
                 self.ingestion_view.set_progress(15)
                 self.ingestion_view.append_log("Monitoreando estado del job...")
@@ -237,6 +245,19 @@ class MainWindow(QMainWindow):
             self.ingestion_view.set_progress(100)
             self.ingestion_view.set_running(False)
             self.ingestion_view.append_log("Job completado")
+            self._set_query_controls_enabled(True)
+            self._job_poll_enabled = False
+            self._active_job_id = None
+            return
+
+        if status in {"partial"}:
+            self.ingestion_view.set_status("error", "Parcial")
+            self.ingestion_view.set_progress(100)
+            self.ingestion_view.set_running(False)
+            self.ingestion_view.append_log(
+                "Job completado parcialmente: revisar readiness antes de consultar."
+            )
+            self._set_query_controls_enabled(True)
             self._job_poll_enabled = False
             self._active_job_id = None
             return
@@ -246,6 +267,7 @@ class MainWindow(QMainWindow):
             self.ingestion_view.set_progress(100)
             self.ingestion_view.set_running(False)
             self.ingestion_view.append_log("Job falló")
+            self._set_query_controls_enabled(True)
             self._job_poll_enabled = False
             self._active_job_id = None
             return
@@ -266,6 +288,14 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if self._job_poll_enabled:
+            self.query_view.set_status("error", "Error")
+            self.query_view.append_assistant_message(
+                "La ingesta está en progreso. Espera a que finalice antes de consultar.",
+                error=True,
+            )
+            return
+
         if not self.query_view.has_repo_id(repo_id):
             self.query_view.set_status("error", "Error")
             self.query_view.append_assistant_message(
@@ -279,6 +309,41 @@ class MainWindow(QMainWindow):
             self.query_view.set_status("error", "Error")
             self.query_view.append_assistant_message(
                 "Debes escribir una pregunta para consultar.",
+                error=True,
+            )
+            return
+
+        try:
+            status_response = requests.get(
+                f"{API_BASE}/repos/{repo_id}/status",
+                timeout=UI_REQUEST_TIMEOUT_SECONDS,
+            )
+            status_response.raise_for_status()
+            status_payload = status_response.json()
+            if not bool(status_payload.get("query_ready")):
+                self.query_view.set_status("error", "Error")
+                warning_lines = status_payload.get("warnings") or []
+                hint = ""
+                if warning_lines:
+                    hint = "\n" + "\n".join(f"- {line}" for line in warning_lines[:3])
+                self.query_view.append_assistant_message(
+                    "El repositorio no esta listo para consultas. "
+                    "Ejecuta una nueva ingesta o revisa el estado de indices."
+                    f"{hint}",
+                    error=True,
+                )
+                return
+        except requests.HTTPError:
+            self.query_view.set_status("error", "Error")
+            self.query_view.append_assistant_message(
+                "No se pudo validar el estado del repositorio antes de consultar.",
+                error=True,
+            )
+            return
+        except Exception as exc:
+            self.query_view.set_status("error", "Error")
+            self.query_view.append_assistant_message(
+                f"Error validando estado del repositorio: {exc}",
                 error=True,
             )
             return
@@ -303,6 +368,10 @@ class MainWindow(QMainWindow):
             response.raise_for_status()
             data = response.json()
             answer_text = str(data.get("answer") or "Sin respuesta.")
+            diagnostics = data.get("diagnostics") or {}
+            fallback_reason = diagnostics.get("fallback_reason")
+            if fallback_reason:
+                answer_text = f"{answer_text}\n\n[diagnóstico: {fallback_reason}]"
             self.query_view.append_assistant_message(answer_text)
             self.evidence_view.set_citations(data.get("citations") or [])
             self.query_view.set_status("success", "Completado")

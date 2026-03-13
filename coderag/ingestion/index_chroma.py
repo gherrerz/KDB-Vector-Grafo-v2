@@ -81,18 +81,11 @@ class ChromaIndex:
         except Exception as exc:
             if not _is_dimension_mismatch_error(exc):
                 raise
-            self.client.delete_collection(collection_name)
-            recreated = self.client.get_or_create_collection(collection_name)
-            self.collections[collection_name] = recreated
-            self.__class__._shared_collections = self.collections
-            self._upsert_batched(
-                collection_name=collection_name,
-                ids=ids,
-                documents=documents,
-                embeddings=embeddings,
-                metadatas=metadatas,
-                batch_size=batch_size,
-            )
+            raise RuntimeError(
+                "Dimensión de embeddings incompatible con la colección "
+                f"'{collection_name}'. Ajusta el modelo o limpia índices de "
+                "forma controlada antes de reintentar."
+            ) from exc
 
     def _max_batch_size(self) -> int:
         """Devuelve el tamaño de lote máximo seguro admitido por el tiempo de ejecución de Chroma."""

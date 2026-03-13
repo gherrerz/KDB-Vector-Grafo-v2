@@ -83,6 +83,7 @@ class JobManager:
 
         try:
             from coderag.ingestion.pipeline import ingest_repository
+            from coderag.core.storage_health import get_repo_query_status
 
             repo_id = ingest_repository(
                 repo_url=request.repo_url,
@@ -92,7 +93,20 @@ class JobManager:
             )
             job.repo_id = repo_id
             job.progress = 1.0
-            job.status = JobStatus.completed
+            readiness = get_repo_query_status(
+                repo_id=repo_id,
+                listed_in_catalog=True,
+            )
+            if readiness.get("query_ready"):
+                job.status = JobStatus.completed
+            else:
+                job.status = JobStatus.partial
+                job.logs.append(
+                    "Ingesta finalizada parcialmente: el repositorio aún no está "
+                    "listo para consultas."
+                )
+                for warning in readiness.get("warnings") or []:
+                    job.logs.append(f"Advertencia readiness: {warning}")
         except Exception as exc:
             job.status = JobStatus.failed
             job.error = str(exc)

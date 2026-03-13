@@ -1,8 +1,13 @@
 """Módulo de expansión GraphRAG que utiliza vecinos Neo4j."""
 
+import logging
+
 from coderag.core.models import RetrievalChunk
 from coderag.core.settings import get_settings
 from coderag.ingestion.graph_builder import GraphBuilder
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def expand_with_graph(chunks: list[RetrievalChunk]) -> list[dict]:
@@ -15,7 +20,8 @@ def expand_with_graph(chunks: list[RetrievalChunk]) -> list[dict]:
     graph = GraphBuilder()
     try:
         return graph.expand_symbols(symbol_ids=symbol_ids, hops=settings.graph_hops)
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("Graph expansion falló; se usará contexto sin grafo: %s", exc)
         return []
     finally:
         graph.close()

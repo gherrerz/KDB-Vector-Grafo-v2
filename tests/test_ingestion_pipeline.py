@@ -37,19 +37,27 @@ def test_ingest_repository_continues_on_graph_failure(
 
     received_scan_args: dict[str, object] = {}
 
-    def _fake_scan_repository(
+    def _fake_scan_repository_with_stats(
         repo_path: Path,
         max_file_size: int = 200_000,
         excluded_dirs: set[str] | None = None,
         excluded_extensions: set[str] | None = None,
         excluded_files: set[str] | None = None,
-    ) -> list[ScannedFile]:
+    ) -> tuple[list[ScannedFile], dict[str, int]]:
         received_scan_args["repo_path"] = repo_path
         received_scan_args["max_file_size"] = max_file_size
         received_scan_args["excluded_dirs"] = excluded_dirs or set()
         received_scan_args["excluded_extensions"] = excluded_extensions or set()
         received_scan_args["excluded_files"] = excluded_files or set()
-        return scanned
+        return scanned, {
+            "visited": 1,
+            "scanned": 1,
+            "excluded_dir": 0,
+            "excluded_extension": 0,
+            "excluded_file": 0,
+            "excluded_size": 0,
+            "excluded_decode": 0,
+        }
 
     monkeypatch.setattr(pipeline, "get_settings", lambda: _Settings())
     monkeypatch.setattr(
@@ -57,7 +65,11 @@ def test_ingest_repository_continues_on_graph_failure(
         "clone_repository",
         lambda repo_url, destination_root, branch, commit: ("r1", tmp_path),
     )
-    monkeypatch.setattr(pipeline, "scan_repository", _fake_scan_repository)
+    monkeypatch.setattr(
+        pipeline,
+        "scan_repository_with_stats",
+        _fake_scan_repository_with_stats,
+    )
     monkeypatch.setattr(
         pipeline,
         "extract_symbol_chunks",

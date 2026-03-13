@@ -30,10 +30,31 @@ def _is_verifier_result_valid(value: str) -> bool:
     if not normalized:
         return False
 
+    if re.search(
+        r"\b(no|sin)\b(?:\s+\w+){0,8}\s+"
+        r"(invalido|invalid|hallucination|hallucinated)\b",
+        normalized,
+    ):
+        return True
+
     if re.search(r"\b(invalido|invalid|hallucination|hallucinated)\b", normalized):
         return False
 
     if re.search(r"\b(valido|valid)\b", normalized):
+        return True
+
+    positive_support_signals = (
+        "sustent",
+        "evidencia suficiente",
+        "coincide con",
+        "alinead",
+        "grounded",
+        "supported",
+        "consistent",
+    )
+    if len(normalized) >= 40 and any(
+        signal in normalized for signal in positive_support_signals
+    ):
         return True
 
     return False

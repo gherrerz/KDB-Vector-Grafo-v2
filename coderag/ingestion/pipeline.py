@@ -10,7 +10,7 @@ from coderag.ingestion.git_client import clone_repository
 from coderag.ingestion.graph_builder import GraphBuilder
 from coderag.ingestion.index_bm25 import GLOBAL_BM25
 from coderag.ingestion.index_chroma import ChromaIndex
-from coderag.ingestion.repo_scanner import scan_repository
+from coderag.ingestion.repo_scanner import scan_repository_with_stats
 from coderag.ingestion.summarizer import summarize_file, summarize_modules
 
 LoggerFn = Callable[[str], None]
@@ -83,16 +83,30 @@ def ingest_repository(
     ) = _read_scan_filters_from_settings(settings)
 
     logger("Escaneando archivos...")
-    scanned_files = scan_repository(
+    scanned_files, scan_stats = scan_repository_with_stats(
         repo_path,
         max_file_size=max_file_size,
         excluded_dirs=excluded_dirs,
         excluded_extensions=excluded_extensions,
         excluded_files=excluded_files,
     )
+    logger(
+        "Escaneo: visitados={visited}, indexados={scanned}, excluidos_dir={excluded_dir}, "
+        "excluidos_ext={excluded_extension}, excluidos_archivo={excluded_file}, "
+        "excluidos_size={excluded_size}, excluidos_decode={excluded_decode}".format(
+            **scan_stats
+        )
+    )
 
     logger("Extrayendo símbolos...")
     symbol_chunks = extract_symbol_chunks(repo_id=repo_id, scanned_files=scanned_files)
+    language_counts: dict[str, int] = {}
+    for item in scanned_files:
+        language_counts[item.language] = language_counts.get(item.language, 0) + 1
+    logger(
+        f"Cobertura: archivos={len(scanned_files)}, chunks={len(symbol_chunks)}, "
+        f"lenguajes={language_counts}"
+    )
 
     logger("Generando embeddings...")
     _index_vectors(repo_id, scanned_files, symbol_chunks)
@@ -244,6 +258,7 @@ def _index_bm25(
     metadatas.extend(module_meta)
 
     GLOBAL_BM25.build(repo_id=repo_id, docs=docs, metadatas=metadatas)
+    GLOBAL_BM25.persist_repo(repo_id)
 
 
 def _index_graph(

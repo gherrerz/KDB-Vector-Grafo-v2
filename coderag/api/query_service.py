@@ -107,6 +107,10 @@ def _fallback_header(fallback_reason: str) -> str:
             "Se alcanzó el presupuesto de tiempo de consulta; mostrando "
             "evidencia trazable disponible."
         ),
+        "insufficient_context": (
+            "No hubo contexto suficiente para una síntesis confiable; "
+            "mostrando evidencia trazable disponible."
+        ),
     }
     return messages.get(
         fallback_reason,
@@ -928,6 +932,15 @@ def _timed_module_discovery(repo_id: str, query: str) -> tuple[list[str], float]
     return result, _elapsed_milliseconds(started_at)
 
 
+def _is_context_sufficient(context: str, reranked_count: int) -> bool:
+    """Evalúa si el contexto tiene señal mínima para responder con LLM."""
+    if reranked_count <= 0:
+        return False
+    if not context.strip():
+        return False
+    return len(context.strip()) >= 80
+
+
 def run_inventory_query(
     repo_id: str,
     query: str,
@@ -1150,7 +1163,10 @@ def run_query(repo_id: str, query: str, top_n: int, top_k: int) -> QueryResponse
     filtered_citations = [
         item for item in raw_citations if not _is_noisy_path(item.path)
     ]
-    citations = sorted(filtered_citations, key=_citation_priority)
+    citations_source = filtered_citations
+    if not citations_source and raw_citations:
+        citations_source = raw_citations
+    citations = sorted(citations_source, key=_citation_priority)
 
     client = AnswerClient()
     fallback_reason: str | None = None
@@ -1158,7 +1174,16 @@ def run_query(repo_id: str, query: str, top_n: int, top_k: int) -> QueryResponse
     verify_skipped = False
     llm_error: str | None = None
 
-    if client.enabled and _remaining_budget_seconds(pipeline_started_at, budget_seconds) > 0:
+    context_sufficient = _is_context_sufficient(context=context, reranked_count=len(reranked))
+
+    if not context_sufficient:
+        fallback_reason = "insufficient_context"
+        answer = _build_extractive_fallback(
+            citations,
+            query=query,
+            fallback_reason=fallback_reason,
+        )
+    elif client.enabled and _remaining_budget_seconds(pipeline_started_at, budget_seconds) > 0:
         try:
             answer_started_at = monotonic()
             answer_timeout = min(
@@ -1182,8 +1207,6 @@ def run_query(repo_id: str, query: str, top_n: int, top_k: int) -> QueryResponse
 
                 if not settings.openai_verify_enabled:
                     verify_skipped = True
-                    if fallback_reason is None:
-                        fallback_reason = "verification_disabled"
                 else:
                     verify_timeout = min(
                         float(settings.openai_timeout_seconds),
@@ -1230,6 +1253,12 @@ def run_query(repo_id: str, query: str, top_n: int, top_k: int) -> QueryResponse
         "retrieved": len(initial),
         "reranked": len(reranked),
         "graph_nodes": len(graph_context),
+        "context_chars": len(context),
+        "raw_citations": len(raw_citations),
+        "filtered_citations": len(filtered_citations),
+        "returned_citations": len(citations),
+        "low_signal_retrieval": len(initial) < 3,
+        "context_sufficient": context_sufficient,
         "openai_enabled": client.enabled,
         "openai_verify_enabled": settings.openai_verify_enabled,
         "discovered_modules": discovered_modules,

@@ -12,6 +12,7 @@ class JobStatus(str, Enum):
 
     queued = "queued"
     running = "running"
+    partial = "partial"
     completed = "completed"
     failed = "failed"
 
@@ -111,6 +112,18 @@ class RepoCatalogResponse(BaseModel):
     """Modelo de salida para identificadores de repositorio disponibles para consultas."""
 
     repo_ids: list[str] = Field(default_factory=list)
+
+
+class RepoQueryStatusResponse(BaseModel):
+    """Estado de disponibilidad de consulta para un repositorio específico."""
+
+    repo_id: str
+    listed_in_catalog: bool
+    query_ready: bool
+    chroma_counts: dict[str, int | None] = Field(default_factory=dict)
+    bm25_loaded: bool
+    graph_available: bool | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class StorageHealthItem(BaseModel):

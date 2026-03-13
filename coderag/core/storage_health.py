@@ -29,6 +29,7 @@ class StoragePreflightError(RuntimeError):
 
 
 _CACHE: dict[tuple[str, str | None], dict[str, Any]] = {}
+QUERY_COLLECTIONS = ["code_symbols", "code_files", "code_modules"]
 
 
 def _now_utc_iso() -> str:
@@ -147,7 +148,8 @@ def _check_bm25(context: str, repo_id: str | None) -> dict[str, Any]:
     if context in {"query", "inventory_query"}:
         if not repo_id:
             return {"repo_id": None, "indexed": False, "ok": False, "critical": False, "message": "repo_id es requerido para validar BM25 en consulta."}
-        if not GLOBAL_BM25.has_repo(repo_id):
+        loaded = GLOBAL_BM25.ensure_repo_loaded(repo_id)
+        if not loaded:
             return {"repo_id": repo_id, "indexed": False, "ok": False, "critical": False, "message": f"No hay índice BM25 cargado para repo '{repo_id}'."}
         return {"repo_id": repo_id, "indexed": True, "ok": True, "critical": False}
     return {"indexed_repos": GLOBAL_BM25.repo_count(), "ok": True, "critical": False}
@@ -348,4 +350,102 @@ def ensure_storage_ready(
     if report["strict"] and not report["ok"]:
         raise StoragePreflightError(report)
     return report
+
+
+def _count_chroma_documents_for_repo(
+    repo_id: str,
+    collection_name: str,
+    page_size: int = 500,
+) -> int:
+    """Cuenta documentos de un repositorio en una colección Chroma paginando por offset."""
+    index = ChromaIndex()
+    collection = index.collections.get(collection_name)
+    if collection is None:
+        return 0
+
+    total = 0
+    offset = 0
+    while True:
+        page = collection.get(
+            where={"repo_id": repo_id},
+            limit=page_size,
+            offset=offset,
+            include=[],
+        )
+        ids = page.get("ids") or []
+        page_count = len(ids)
+        total += page_count
+        if page_count < page_size:
+            break
+        offset += page_size
+    return total
+
+
+def _check_repo_graph_available(repo_id: str, timeout_seconds: float) -> bool:
+    """Determina si existen nodos asociados al repo en Neo4j."""
+    settings = get_settings()
+    driver = GraphDatabase.driver(
+        settings.neo4j_uri,
+        auth=(settings.neo4j_user, settings.neo4j_password),
+        connection_timeout=max(1.0, timeout_seconds),
+    )
+    try:
+        with driver.session() as session:
+            record = session.run(
+                "MATCH (n {repo_id: $repo_id}) RETURN count(n) AS total",
+                repo_id=repo_id,
+            ).single()
+        if record is None:
+            return False
+        return int(record["total"]) > 0
+    finally:
+        driver.close()
+
+
+def get_repo_query_status(
+    *,
+    repo_id: str,
+    listed_in_catalog: bool,
+) -> dict[str, Any]:
+    """Evalúa si un repositorio está listo para consultas RAG."""
+    settings = get_settings()
+    warnings: list[str] = []
+    chroma_counts: dict[str, int | None] = {}
+
+    for collection_name in QUERY_COLLECTIONS:
+        try:
+            chroma_counts[collection_name] = _count_chroma_documents_for_repo(
+                repo_id=repo_id,
+                collection_name=collection_name,
+            )
+        except Exception as exc:  # pragma: no cover - depende de infraestructura
+            chroma_counts[collection_name] = None
+            warnings.append(
+                f"No se pudo contar {collection_name} en Chroma: {exc}"
+            )
+
+    bm25_loaded = GLOBAL_BM25.ensure_repo_loaded(repo_id)
+    if not bm25_loaded:
+        warnings.append(f"No hay indice BM25 en memoria para repo '{repo_id}'.")
+
+    graph_available: bool | None = None
+    try:
+        graph_available = _check_repo_graph_available(
+            repo_id=repo_id,
+            timeout_seconds=max(1.0, float(settings.health_check_timeout_seconds)),
+        )
+    except Exception as exc:  # pragma: no cover - depende de infraestructura
+        warnings.append(f"Neo4j no disponible para validar repo '{repo_id}': {exc}")
+
+    chroma_has_docs = any((count or 0) > 0 for count in chroma_counts.values())
+    query_ready = bool(chroma_has_docs and bm25_loaded)
+    return {
+        "repo_id": repo_id,
+        "listed_in_catalog": listed_in_catalog,
+        "query_ready": query_ready,
+        "chroma_counts": chroma_counts,
+        "bm25_loaded": bm25_loaded,
+        "graph_available": graph_available,
+        "warnings": warnings,
+    }
 

@@ -85,6 +85,44 @@ def test_list_repos_returns_repo_id_catalog(monkeypatch) -> None:
     assert response.json()["repo_ids"] == ["mall", "api-service"]
 
 
+def test_repo_status_endpoint_returns_structured_repo_readiness(monkeypatch) -> None:
+    """Retorna estado consultable por repo con shape estable para UI/API."""
+
+    def fake_list_repo_ids() -> list[str]:
+        return ["mall"]
+
+    def fake_get_repo_query_status(*, repo_id: str, listed_in_catalog: bool) -> dict:
+        assert repo_id == "mall"
+        assert listed_in_catalog is True
+        return {
+            "repo_id": "mall",
+            "listed_in_catalog": True,
+            "query_ready": True,
+            "chroma_counts": {
+                "code_symbols": 10,
+                "code_files": 5,
+                "code_modules": 2,
+            },
+            "bm25_loaded": True,
+            "graph_available": True,
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(server.jobs, "list_repo_ids", fake_list_repo_ids)
+    monkeypatch.setattr(server, "get_repo_query_status", fake_get_repo_query_status)
+
+    client = TestClient(app)
+    response = client.get("/repos/mall/status")
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["repo_id"] == "mall"
+    assert payload["listed_in_catalog"] is True
+    assert payload["query_ready"] is True
+    assert payload["bm25_loaded"] is True
+    assert payload["chroma_counts"]["code_symbols"] == 10
+
+
 def test_inventory_query_endpoint_returns_paginated_payload(monkeypatch) -> None:
     """Devuelve una respuesta de inventario estructurada a través de un punto final dedicado."""
     from coderag.api import query_service
@@ -196,6 +234,48 @@ def test_query_endpoint_blocks_when_storage_preflight_fails(monkeypatch) -> None
     assert response.status_code == 503
     payload = response.json()
     assert payload["detail"]["health"]["failed_components"] == ["neo4j"]
+
+
+def test_query_endpoint_returns_422_when_repo_is_not_ready(monkeypatch) -> None:
+    """Cuando el repo no esta listo para query, la API responde 422 con detalle accionable."""
+
+    def fake_list_repo_ids() -> list[str]:
+        return ["mall"]
+
+    def fake_get_repo_query_status(*, repo_id: str, listed_in_catalog: bool) -> dict:
+        assert repo_id == "mall"
+        assert listed_in_catalog is True
+        return {
+            "repo_id": "mall",
+            "listed_in_catalog": True,
+            "query_ready": False,
+            "chroma_counts": {
+                "code_symbols": 0,
+                "code_files": 0,
+                "code_modules": 0,
+            },
+            "bm25_loaded": False,
+            "graph_available": None,
+            "warnings": ["No hay indice BM25 en memoria para repo 'mall'."],
+        }
+
+    monkeypatch.setattr(server.jobs, "list_repo_ids", fake_list_repo_ids)
+    monkeypatch.setattr(server, "get_repo_query_status", fake_get_repo_query_status)
+
+    client = TestClient(app)
+    response = client.post(
+        "/query",
+        json={
+            "repo_id": "mall",
+            "query": "hola",
+            "top_n": 5,
+            "top_k": 3,
+        },
+    )
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"]["code"] == "repo_not_ready"
+    assert payload["detail"]["repo_status"]["query_ready"] is False
 
 
 @pytest.mark.parametrize(

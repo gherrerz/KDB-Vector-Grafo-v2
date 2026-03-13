@@ -551,3 +551,87 @@ def test_run_inventory_query_includes_component_purposes_when_requested(
     assert "modelos de datos" in result.answer
     assert result.diagnostics["inventory_explain"] is True
     assert result.diagnostics["inventory_purpose_count"] == 2
+
+
+def test_run_query_retries_with_raw_citations_if_filtered_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Si el filtrado elimina todo, reutiliza citas crudas para evitar fallback vacío."""
+
+    def _fake_hybrid(repo_id: str, query: str, top_n: int) -> list[RetrievalChunk]:
+        return [
+            RetrievalChunk(
+                id="c1",
+                text="Doc",
+                score=0.9,
+                metadata={"path": "docs", "start_line": 1, "end_line": 10},
+            )
+        ]
+
+    monkeypatch.setattr(query_service, "hybrid_search", _fake_hybrid)
+    monkeypatch.setattr(query_service, "rerank", lambda chunks, top_k: chunks)
+    monkeypatch.setattr(query_service, "expand_with_graph", lambda chunks: [])
+    monkeypatch.setattr(
+        query_service,
+        "assemble_context",
+        lambda chunks, graph_records, max_tokens: "contexto suficiente para llm",
+    )
+
+    class _AnswerClient:
+        enabled = False
+
+    monkeypatch.setattr(query_service, "AnswerClient", _AnswerClient)
+
+    result = query_service.run_query(
+        repo_id="repo1",
+        query="dime algo",
+        top_n=10,
+        top_k=5,
+    )
+
+    assert result.citations
+    assert result.citations[0].path == "docs"
+    assert result.diagnostics["filtered_citations"] == 0
+    assert result.diagnostics["raw_citations"] == 1
+
+
+def test_run_query_uses_insufficient_context_fallback_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Evita generación LLM cuando el contexto es insuficiente y deja razón diagnóstica."""
+
+    def _fake_hybrid(repo_id: str, query: str, top_n: int) -> list[RetrievalChunk]:
+        return [
+            RetrievalChunk(
+                id="c1",
+                text="tiny",
+                score=0.7,
+                metadata={"path": "core/a.py", "start_line": 1, "end_line": 2},
+            )
+        ]
+
+    monkeypatch.setattr(query_service, "hybrid_search", _fake_hybrid)
+    monkeypatch.setattr(query_service, "rerank", lambda chunks, top_k: chunks)
+    monkeypatch.setattr(query_service, "expand_with_graph", lambda chunks: [])
+    monkeypatch.setattr(query_service, "assemble_context", lambda *args, **kwargs: "x")
+
+    class _AnswerClient:
+        enabled = True
+
+        def answer(self, *args, **kwargs):  # pragma: no cover - no debería ejecutarse
+            raise AssertionError("LLM no debe ejecutarse con contexto insuficiente")
+
+        def verify(self, *args, **kwargs):  # pragma: no cover - no debería ejecutarse
+            raise AssertionError("verify no debe ejecutarse con contexto insuficiente")
+
+    monkeypatch.setattr(query_service, "AnswerClient", _AnswerClient)
+
+    result = query_service.run_query(
+        repo_id="repo1",
+        query="consulta",
+        top_n=10,
+        top_k=5,
+    )
+
+    assert result.diagnostics["context_sufficient"] is False
+    assert result.diagnostics["fallback_reason"] == "insufficient_context"

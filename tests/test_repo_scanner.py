@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from coderag.ingestion.repo_scanner import scan_repository
+from coderag.ingestion.repo_scanner import scan_repository, scan_repository_with_stats
 
 
 def test_scan_repository_excludes_dirs_extensions_and_large_files(tmp_path: Path) -> None:
@@ -83,3 +83,28 @@ def test_scan_repository_excludes_specific_files_list(tmp_path: Path) -> None:
     assert ".env" not in scanned_paths
     assert "src/secret.txt" not in scanned_paths
     assert "src/ok.py" in scanned_paths
+
+
+def test_scan_repository_with_stats_reports_exclusion_reasons(tmp_path: Path) -> None:
+    """Expone contadores por causa de exclusión para observabilidad de ingesta."""
+    (tmp_path / "src").mkdir(parents=True)
+    (tmp_path / "skipdir").mkdir(parents=True)
+    (tmp_path / "skipdir" / "x.py").write_text("print(1)\n", encoding="utf-8")
+    (tmp_path / "src" / "ok.py").write_text("print(2)\n", encoding="utf-8")
+    (tmp_path / "src" / "blob.bin").write_bytes(b"123")
+    (tmp_path / "src" / "large.txt").write_text("x" * 400, encoding="utf-8")
+
+    scanned, stats = scan_repository_with_stats(
+        tmp_path,
+        max_file_size=200,
+        excluded_dirs={"skipdir"},
+        excluded_extensions={".bin"},
+        excluded_files=set(),
+    )
+
+    scanned_paths = {item.path for item in scanned}
+    assert "src/ok.py" in scanned_paths
+    assert stats["visited"] >= 4
+    assert stats["excluded_dir"] >= 1
+    assert stats["excluded_extension"] >= 1
+    assert stats["excluded_size"] >= 1

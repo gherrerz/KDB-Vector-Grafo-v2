@@ -93,3 +93,29 @@ def test_refresh_repo_switch_clears_chat_and_evidence(window: MainWindow) -> Non
     assert window.query_view.get_repo_id_text() == "repo-b"
     assert window.query_view.history_output.toPlainText() == ""
     assert window.evidence_view.table.rowCount() == 0
+
+
+def test_on_query_is_blocked_while_ingest_is_running(window: MainWindow) -> None:
+    """Bloquea consultas cuando existe ingesta activa para evitar estados engañosos."""
+    window._job_poll_enabled = True
+    window.query_view.query_input.setText("hola")
+    window.query_view.repo_id.setCurrentText("repo-a")
+
+    window._on_query()
+
+    history = window.query_view.history_output.toPlainText().lower()
+    assert "ingesta está en progreso" in history
+
+
+def test_sync_job_ui_partial_unlocks_query_controls(window: MainWindow) -> None:
+    """Un job en estado partial desbloquea consulta y deja estado visible en ingesta."""
+    window._set_query_controls_enabled(False)
+    window._job_poll_enabled = True
+    window._active_job_id = "job-1"
+
+    window._sync_job_ui({"status": "partial", "logs": ["warn"]})
+
+    assert window._job_poll_enabled is False
+    assert window._active_job_id is None
+    assert window.query_view.query_button.isEnabled() is True
+    assert window.ingestion_view.status_chip.text() == "Parcial"

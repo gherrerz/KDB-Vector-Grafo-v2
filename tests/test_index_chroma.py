@@ -79,6 +79,9 @@ def test_upsert_is_split_by_chroma_max_batch_size(monkeypatch: pytest.MonkeyPatc
         "PersistentClient",
         lambda *args, **kwargs: fake_client,
     )
+    module.ChromaIndex._shared_client = None
+    module.ChromaIndex._shared_collections = None
+    module.ChromaIndex._shared_path = None
     index = ChromaIndex()
 
     ids = [f"id{i}" for i in range(7)]
@@ -94,7 +97,7 @@ def test_upsert_is_split_by_chroma_max_batch_size(monkeypatch: pytest.MonkeyPatc
 def test_upsert_recovers_from_dimension_message_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Recrea la colección cuando el error dimensional llega como RuntimeError."""
+    """Lanza error controlado sin borrar la colección ante mismatch dimensional."""
     fake_client = _FakeClient()
     fake_client.collections["code_symbols"] = _FakeCollection(
         error_once=RuntimeError(
@@ -109,12 +112,17 @@ def test_upsert_recovers_from_dimension_message_error(
         "PersistentClient",
         lambda *args, **kwargs: fake_client,
     )
+    module.ChromaIndex._shared_client = None
+    module.ChromaIndex._shared_collections = None
+    module.ChromaIndex._shared_path = None
     index = ChromaIndex()
 
     ids = ["id1", "id2"]
     docs = ["x", "y"]
     embeds = [[0.1, 0.2], [0.2, 0.1]]
     metas = [{"i": 1}, {"i": 2}]
-    index.upsert("code_symbols", ids, docs, embeds, metas)
+    with pytest.raises(RuntimeError) as exc_info:
+        index.upsert("code_symbols", ids, docs, embeds, metas)
 
-    assert fake_client.collections["code_symbols"].calls == [2]
+    message = str(exc_info.value)
+    assert "Dimensión de embeddings incompatible" in message

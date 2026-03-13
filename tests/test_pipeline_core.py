@@ -42,6 +42,52 @@ def test_extract_symbol_chunks_python_def_and_class() -> None:
     assert "run" in names
 
 
+def test_extract_symbol_chunks_markdown_headings() -> None:
+    """Extrae secciones de markdown cuando no hay símbolos de código tradicionales."""
+    scanned = [
+        ScannedFile(
+            path="README.md",
+            language="markdown",
+            content="# Proyecto\n\n## Instalacion\n\nTexto\n",
+        )
+    ]
+    chunks = extract_symbol_chunks(repo_id="repo1", scanned_files=scanned)
+    names = {item.symbol_name for item in chunks}
+    types = {item.symbol_type for item in chunks}
+    assert "Proyecto" in names
+    assert "Instalacion" in names
+    assert "section" in types
+
+
+def test_extract_symbol_chunks_config_keys_yaml_json_toml() -> None:
+    """Extrae claves de configuración para yaml, json y toml."""
+    scanned = [
+        ScannedFile(
+            path="cfg/app.yaml",
+            language="yaml",
+            content="server:\n  port: 8000\n",
+        ),
+        ScannedFile(
+            path="cfg/app.json",
+            language="json",
+            content='{"name": "demo", "version": 1}',
+        ),
+        ScannedFile(
+            path="cfg/app.toml",
+            language="toml",
+            content="title = \"demo\"\n[db]\nurl = \"x\"\n",
+        ),
+    ]
+
+    chunks = extract_symbol_chunks(repo_id="repo1", scanned_files=scanned)
+    names = {item.symbol_name for item in chunks}
+    types = {item.symbol_type for item in chunks}
+    assert "server" in names
+    assert "name" in names
+    assert "title" in names
+    assert "config_key" in types
+
+
 def test_bm25_returns_ranked_documents() -> None:
     """Devuelve el documento principal que coincide exactamente con los términos de la consulta."""
     index = BM25Index()
@@ -51,6 +97,37 @@ def test_bm25_returns_ranked_documents() -> None:
         metadatas=[{"id": "a"}, {"id": "b"}],
     )
     result = index.query(repo_id="r1", text="payment", top_n=1)
+    assert result
+    assert result[0]["id"] == "a"
+
+
+def test_bm25_persist_and_load_roundtrip(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Persiste y recarga BM25 para mantener capacidad tras reinicio."""
+    index = BM25Index()
+
+    class _Settings:
+        workspace_path = tmp_path / "workspace"
+
+    (_Settings.workspace_path).mkdir(parents=True, exist_ok=True)
+
+    import coderag.ingestion.index_bm25 as module
+
+    monkeypatch.setattr(module, "get_settings", lambda: _Settings())
+
+    index.build(
+        repo_id="r1",
+        docs=["alpha beta", "gamma"],
+        metadatas=[{"id": "a"}, {"id": "b"}],
+    )
+    assert index.persist_repo("r1") is True
+
+    other = BM25Index()
+    monkeypatch.setattr(module, "get_settings", lambda: _Settings())
+    assert other.ensure_repo_loaded("r1") is True
+    result = other.query(repo_id="r1", text="alpha", top_n=1)
     assert result
     assert result[0]["id"] == "a"
 
